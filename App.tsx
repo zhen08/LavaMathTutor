@@ -6,8 +6,9 @@ import { Speaker, TranscriptEntry } from './types';
 import { createBlob, decode, decodeAudioData, blobToBase64 } from './services/audioUtils';
 import TranscriptView from './components/TranscriptView';
 import StatusIndicator from './components/StatusIndicator';
-import { MicrophoneIcon, StopIcon, PaperclipIcon } from './components/Icons';
+import { MicrophoneIcon, StopIcon, PaperclipIcon, PencilIcon } from './components/Icons';
 import PinScreen from './components/PinScreen';
+import DrawingPad from './components/DrawingPad';
 
 // FIX: Defined a local `LiveSession` interface for type safety.
 interface LiveSession {
@@ -22,6 +23,7 @@ const SYSTEM_INSTRUCTION = `You are a friendly and encouraging Socratic math tut
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
+  const [isDrawingPadOpen, setIsDrawingPadOpen] = useState(false);
   const [status, setStatus] = useState<'IDLE' | 'CONNECTING' | 'LISTENING' | 'THINKING' | 'SPEAKING'>('IDLE');
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 
@@ -326,6 +328,29 @@ const App: React.FC = () => {
       }
     }
   }, [isSessionActive, handleFileSelect]);
+
+  const handleSendDrawing = useCallback(async (imageDataUrl: string) => {
+    if (!sessionPromiseRef.current) {
+      alert('Please start the session before sending a drawing.');
+      return;
+    }
+
+    setTranscript(prev => [...prev, { speaker: Speaker.USER, text: '', image: imageDataUrl }]);
+    
+    try {
+        const base64Data = imageDataUrl.split(',')[1];
+        if (!base64Data) {
+            throw new Error("Invalid image data URL");
+        }
+        const session = await sessionPromiseRef.current!;
+        session.sendRealtimeInput({
+            media: { data: base64Data, mimeType: 'image/png' }
+        });
+    } catch (error) {
+        console.error("Failed to send drawing:", error);
+        alert("There was an error sending the drawing.");
+    }
+  }, []);
   
   useEffect(() => {
     document.addEventListener('paste', handlePaste);
@@ -385,9 +410,22 @@ const App: React.FC = () => {
           >
             {isSessionActive ? <StopIcon className="w-8 h-8 text-white" /> : <MicrophoneIcon className="w-8 h-8 text-white" />}
           </button>
+          <button
+            onClick={() => setIsDrawingPadOpen(true)}
+            disabled={!isSessionActive || status === 'CONNECTING'}
+            className="w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-opacity-50 bg-gray-600 hover:bg-gray-700 focus:ring-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Open drawing pad"
+          >
+            <PencilIcon className="w-7 h-7 text-white" />
+          </button>
         </div>
         <p className="text-xs text-gray-500 pt-1">You can also paste an image from your clipboard during an active session.</p>
       </footer>
+      <DrawingPad 
+        isOpen={isDrawingPadOpen}
+        onClose={() => setIsDrawingPadOpen(false)}
+        onSend={handleSendDrawing}
+      />
     </div>
   );
 };
