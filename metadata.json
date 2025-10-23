@@ -1,0 +1,7 @@
+{
+  "name": "Lava Math Tutor",
+  "description": "An interactive math tutor that uses the Gemini Live API to guide you through problems using the Socratic method. Speak your math questions and get real-time, voice-based guidance.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
