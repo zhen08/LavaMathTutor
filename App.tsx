@@ -3,12 +3,13 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 // FIX: Import `Blob` type for use in the local `LiveSession` interface.
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { Speaker, TranscriptEntry } from './types';
-import { createBlob, decode, decodeAudioData, blobToBase64 } from './services/audioUtils';
+import { createBlob, decode, decodeAudioData } from './services/audioUtils';
 import TranscriptView from './components/TranscriptView';
 import StatusIndicator from './components/StatusIndicator';
 import { MicrophoneIcon, StopIcon, PaperclipIcon, PencilIcon } from './components/Icons';
 import PinScreen from './components/PinScreen';
 import DrawingPad from './components/DrawingPad';
+import ImageCropper from './components/ImageCropper';
 
 // FIX: Defined a local `LiveSession` interface for type safety.
 interface LiveSession {
@@ -24,6 +25,8 @@ const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isDrawingPadOpen, setIsDrawingPadOpen] = useState(false);
+  const [isCropperOpen, setIsCropperOpen] = useState(false);
+  const [imageToCrop, setImageToCrop] = useState<string | null>(null);
   const [status, setStatus] = useState<'IDLE' | 'CONNECTING' | 'LISTENING' | 'THINKING' | 'SPEAKING'>('IDLE');
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 
@@ -74,73 +77,8 @@ const App: React.FC = () => {
     nextStartTimeRef.current = 0;
   }, []);
 
-  const handleEmailTranscript = useCallback(() => {
-    if (transcript.length === 0) {
-      return;
-    }
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Lava Math Tutor Transcript</title>
-        <style>
-          body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #111827; color: #F9FAFB; }
-          .container { max-width: 800px; margin: auto; }
-          h1 { text-align: center; color: #E5E7EB; border-bottom: 1px solid #374151; padding-bottom: 10px; }
-          .message-entry { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 24px; }
-          .message-entry.user { justify-content: flex-end; }
-          .avatar { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-weight: bold; }
-          .avatar.tutor { background-color: #3B82F6; color: white; }
-          .avatar.user { background-color: #16A34A; color: white; }
-          .message-bubble { max-width: 70%; border-radius: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,.1), 0 2px 4px -2px rgba(0,0,0,.1); padding: 4px; }
-          .message-bubble.user { background-color: #374151; border-bottom-right-radius: 0; }
-          .message-bubble.tutor { background-color: #1F2937; border-bottom-left-radius: 0; }
-          .message-bubble p { margin: 12px; }
-          .message-bubble img { border-radius: 1rem; max-width: 100%; height: auto; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>Lava Math Tutor Transcript</h1>
-          ${transcript.map(entry => `
-            <div class="message-entry ${entry.speaker === Speaker.USER ? 'user' : 'tutor'}">
-              ${entry.speaker === Speaker.TUTOR ? '<div class="avatar tutor">T</div>' : ''}
-              <div class="message-bubble ${entry.speaker === Speaker.USER ? 'user' : 'tutor'}">
-                ${entry.image ? `<img src="${entry.image}" alt="User provided content">` : ''}
-                ${entry.text ? `<p>${entry.text.replace(/\n/g, '<br>')}</p>` : ''}
-              </div>
-              ${entry.speaker === Speaker.USER ? '<div class="avatar user">U</div>' : ''}
-            </div>
-          `).join('')}
-        </div>
-      </body>
-      </html>
-    `;
-
-    const blob = new Blob([htmlContent], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `lava-math-tutor-transcript-${new Date().toISOString()}.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    alert("Transcript has been downloaded. Please attach the downloaded HTML file to your email.");
-
-    const subject = encodeURIComponent("Lava Math Tutor Session Transcript");
-    window.location.href = `mailto:zhen08@gmail.com?subject=${subject}`;
-  }, [transcript]);
-
   const handleToggleSession = useCallback(async () => {
     if (isSessionActive) {
-      if (transcript.length > 0) {
-        handleEmailTranscript();
-      }
       if (sessionPromiseRef.current) {
         sessionPromiseRef.current.then(session => session.close());
       }
@@ -267,7 +205,7 @@ const App: React.FC = () => {
       alert('Could not start session. Please ensure you have given microphone permissions.');
       setStatus('IDLE');
     }
-  }, [isSessionActive, processAudioPlayback, stopAllPlayback, transcript, handleEmailTranscript]);
+  }, [isSessionActive, processAudioPlayback, stopAllPlayback, transcript]);
 
   const handleFileSelect = async (file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -281,26 +219,39 @@ const App: React.FC = () => {
   
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = async () => {
+    reader.onload = () => {
       const imageDataUrl = reader.result as string;
-      setTranscript(prev => [...prev, { speaker: Speaker.USER, text: '', image: imageDataUrl }]);
-  
-      try {
-        const base64Data = await blobToBase64(file);
-        const session = await sessionPromiseRef.current!;
-        session.sendRealtimeInput({
-          media: { data: base64Data, mimeType: file.type }
-        });
-      } catch (error) {
-        console.error("Failed to send image:", error);
-        alert("There was an error sending the image.");
-      }
+      setImageToCrop(imageDataUrl);
+      setIsCropperOpen(true);
     };
     reader.onerror = (error) => {
       console.error("Error reading file:", error);
       alert("Failed to read image file.");
     };
   };
+
+  const handleCropComplete = useCallback(async (imageDataUrl: string) => {
+    if (!sessionPromiseRef.current) {
+      alert('Please start the session before sending a cropped image.');
+      return;
+    }
+
+    setTranscript(prev => [...prev, { speaker: Speaker.USER, text: '', image: imageDataUrl }]);
+    
+    try {
+        const base64Data = imageDataUrl.split(',')[1];
+        if (!base64Data) {
+            throw new Error("Invalid image data URL");
+        }
+        const session = await sessionPromiseRef.current!;
+        session.sendRealtimeInput({
+            media: { data: base64Data, mimeType: 'image/png' }
+        });
+    } catch (error) {
+        console.error("Failed to send cropped image:", error);
+        alert("There was an error sending the cropped image.");
+    }
+  }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -425,6 +376,15 @@ const App: React.FC = () => {
         isOpen={isDrawingPadOpen}
         onClose={() => setIsDrawingPadOpen(false)}
         onSend={handleSendDrawing}
+      />
+      <ImageCropper 
+        isOpen={isCropperOpen}
+        src={imageToCrop}
+        onClose={() => {
+          setIsCropperOpen(false);
+          setImageToCrop(null);
+        }}
+        onCrop={handleCropComplete}
       />
     </div>
   );
